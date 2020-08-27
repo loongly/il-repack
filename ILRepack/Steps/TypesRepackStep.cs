@@ -27,7 +27,7 @@ namespace ILRepacking.Steps
     {
         private readonly ILogger _logger;
         private readonly IRepackContext _repackContext;
-        private readonly IRepackImporter _repackImporter;
+        private readonly RepackImporter _repackImporter;
         private readonly RepackOptions _repackOptions;
         private List<TypeDefinition> _allTypes;
 
@@ -39,14 +39,18 @@ namespace ILRepacking.Steps
         {
             _logger = logger;
             _repackContext = repackContext;
-            _repackImporter = repackImporter;
+            _repackImporter = repackImporter as RepackImporter;
             _repackOptions = repackOptions;
 
-            _allTypes =
-                _repackContext.OtherAssemblies.Concat(new[] { _repackContext.PrimaryAssemblyDefinition })
+            var types = _repackContext.OtherAssemblies.Concat(new[] { _repackContext.PrimaryAssemblyDefinition })
                     .SelectMany(x => x.Modules)
                     .SelectMany(m => m.Types)
                     .ToList();
+
+            if(_repackOptions.OptMode == OptionMode.merge)
+                _allTypes = types;
+            else
+                _allTypes = StripTypes(types);
         }
 
         public void Perform()
@@ -59,19 +63,82 @@ namespace ILRepacking.Steps
         {
             _logger.Info("Processing types");
 
-            // merge types, this differs between 'primary' and 'other' assemblies regarding internalizing
-
-            foreach (var r in _repackContext.PrimaryAssemblyDefinition.Modules.SelectMany(x => x.Types))
+            if (_repackOptions.OptMode == OptionMode.merge)
             {
-                _logger.Verbose($"- Importing {r} from {r.Module}");
-                _repackImporter.Import(r, _repackContext.TargetAssemblyMainModule.Types, false);
+                // merge types, this differs between 'primary' and 'other' assemblies regarding internalizing
+
+                foreach (var r in _repackContext.PrimaryAssemblyDefinition.Modules.SelectMany(x => x.Types))
+                {
+                    _logger.Verbose($"- Importing {r} from {r.Module}");
+                    _repackImporter.Import(r, _repackContext.TargetAssemblyMainModule.Types, false);
+                }
+
+                foreach (var r in _repackContext.OtherAssemblies.SelectMany(x => x.Modules).SelectMany(m => m.Types))
+                {
+                    _logger.Verbose($"- Importing {r} from {r.Module}");
+                    _repackImporter.Import(r, _repackContext.TargetAssemblyMainModule.Types, ShouldInternalize(r.FullName));
+                }
+            }
+            else
+            {
+                foreach (var r in _allTypes)
+                {
+                    _logger.Verbose($"- Importing {r} from {r.Module}");
+                    _repackImporter.Import(r, _repackContext.TargetAssemblyMainModule.Types, false);
+                }
+            }
+        }
+
+        private bool Filter(TypeDefinition t)
+        {
+            var res = (t.IsPublic || t.IsNestedPublic) && (t.IsValueType || t.IsEnum);
+            if (!res)
+                return false;
+            foreach(var m in t.Methods)
+            {
+                if (m.IsInternalCall || m.IsUnmanaged || m.IsUnmanagedExport)
+                    return false;
             }
 
-            foreach (var r in _repackContext.OtherAssemblies.SelectMany(x => x.Modules).SelectMany(m => m.Types))
+            return true;
+        }
+
+        private List<TypeDefinition> StripTypes(List<TypeDefinition> types)
+        {
+            List<TypeDefinition> typeList = new List<TypeDefinition>();
+            foreach (var t in types)
             {
-                _logger.Verbose($"- Importing {r} from {r.Module}");
-                _repackImporter.Import(r, _repackContext.TargetAssemblyMainModule.Types, ShouldInternalize(r.FullName));
+                if (Filter(t))
+                {
+                    typeList.Add(t);
+                }
+                else
+                {
+                    bool isContainer = false;
+                    List<TypeDefinition> removeList = new List<TypeDefinition>();
+                    foreach (var nt in t.NestedTypes)
+                    {
+                        if (Filter(nt))
+                        {
+                            isContainer = true;
+                            typeList.Add(nt);
+                        }
+                        else
+                            removeList.Add(nt);
+                    }
+                    if (isContainer)
+                    {
+                        typeList.Add(t);
+                        t.Fields.Clear();
+                        t.Methods.Clear();
+                        t.Properties.Clear();
+                        foreach (var rt in removeList)
+                            t.NestedTypes.Remove(rt);
+                    }
+                }
             }
+
+            return typeList;
         }
 
         private bool SkipExportedType(ExportedType type)
@@ -100,8 +167,7 @@ namespace ILRepacking.Steps
             foreach (var r in _repackContext.PrimaryAssemblyDefinition.Modules.SelectMany(x => x.ExportedTypes))
             {
                 _logger.Verbose($"- Importing Exported Type {r} from {r.Scope}");
-                _repackImporter.Import(
-                    r, targetAssemblyMainModule.ExportedTypes, targetAssemblyMainModule);
+                _repackImporter.Import(r, targetAssemblyMainModule.ExportedTypes, targetAssemblyMainModule);
             }
 
             foreach (var m in _repackContext.OtherAssemblies.SelectMany(x => x.Modules))

@@ -79,6 +79,8 @@ namespace ILRepacking
         public bool KeepOtherVersionReferences { get; set; }
         public bool LineIndexation { get; set; }
 
+        public OptionMode OptMode { get; set; }
+
         /// <summary>
         /// If Internalize is set to true, any which match these 
         /// regular expressions will not be internalized. 
@@ -238,6 +240,11 @@ namespace ILRepacking
                 }
             }
 
+            if (cmd.HasOption("mode"))
+                OptMode = (OptionMode)Enum.Parse(typeof(OptionMode), cmd.Option("mode"), true);
+            else
+                OptMode = OptionMode.merge;
+
             // everything that doesn't start with a '/' must be a file to merge (verify when loading the files)
             InputAssemblies = cmd.OtherAguments;
         }
@@ -302,5 +309,11 @@ namespace ILRepacking
 
             return commandLine.ToString();
         }
+    }
+
+    public enum OptionMode
+    {
+        merge,
+        strip,
     }
 }

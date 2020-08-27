@@ -615,7 +615,7 @@ namespace ILRepacking
             var ret = _repackContext.ReflectionHelper.FindMethodDefinitionInType(nt, methodDefinition);
             if (ret == null)
             {
-                _logger.Warn("Method '" + methodDefinition.FullName + "' not found in merged type '" + nt.FullName + "'");
+                _logger.Warn("Method '" + methodDefinition.FullName + "' not found in merged type '" + nt.FullName + "'  refby: "+ methodDefinition.DeclaringType+" // " +methodDefinition.FullName);
             }
             return ret;
         }
